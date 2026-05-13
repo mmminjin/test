@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Welcome to My 2000s Homey 🌿</title>
+        <style>
+            body {
+                background-color: #000;
+                color: #00ff00;
+                font-family: "돋움", dotum, sans-serif;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+                margin: 0;
+            }
+            h1 {
+                font-size: 1.5rem;
+                margin-bottom: 20px;
+                text-shadow: 2px 2px #0000ff;
+            }
+            #canvas-container {
+                border: 2px solid #555;
+                line-height: 0;
+            }
+            .marquee {
+                width: 400px;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>✨ 나만의 사이버 월드에 오신 것을 환영합니다 ✨</h1>
+
+        <div id="canvas-container">
+            <canvas id="lakeCanvas"></canvas>
+        </div>
+
+        <!-- 그 시절 필수 요소: 마퀴 태그 -->
+        <marquee class="marquee" behavior="alternate">
+            방명록 남겨주세요... 잊지말고 일촌신청! ♬
+        </marquee>
+
+        <script>
+            const canvas = document.getElementById("lakeCanvas");
+            const ctx = canvas.getContext("2d");
+            const img = new Image();
+
+            // 여기에 원하는 이미지 URL을 넣으세요.
+            // 90년대 감성을 위해 산이나 바다 사진을 추천합니다.
+            img.src = "https://picsum.photos/id/10/400/200";
+
+            let step = 0;
+
+            img.onload = function () {
+                // 캔버스 크기를 이미지에 맞춰 설정 (상단 원본 + 하단 반영)
+                canvas.width = img.width;
+                canvas.height = img.height * 2;
+                animate();
+            };
+
+            function animate() {
+                // 1. 상단 원본 이미지 그리기
+                ctx.drawImage(img, 0, 0);
+
+                // 2. 하단 물결 효과 만들기
+                const reflectionHeight = img.height;
+                const width = img.width;
+
+                for (let i = 0; i < reflectionHeight; i++) {
+                    // 사인파를 이용한 가로 오프셋 계산
+                    // Math.sin((현재줄 / 파장) + 시간흐름) * 진폭
+                    let offset =
+                        Math.sin(i / 10 + step / 10) *
+                        (i / reflectionHeight) *
+                        8;
+
+                    // 이미지를 한 줄씩(1px) 읽어서 뒤집어 그리기
+                    ctx.drawImage(
+                        img,
+                        0,
+                        reflectionHeight - i - 1,
+                        width,
+                        1, // 원본의 하단부터 한 줄씩 샘플링
+                        offset,
+                        reflectionHeight + i,
+                        width,
+                        1, // 캔버스 하단에 오프셋을 줘서 그림
+                    );
+                }
+
+                step++;
+                requestAnimationFrame(animate);
+            }
+        </script>
+    </body>
+</html>
