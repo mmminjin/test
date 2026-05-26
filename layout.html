@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="UTF-8" />
+
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family: Arial, sans-serif;
+            }
+
+            /* 전체 안전 영역 */
+            .screen {
+                position: fixed;
+
+                /* 전체 패딩 역할 */
+                inset: 60px;
+            }
+
+            .text {
+                position: absolute;
+                white-space: nowrap;
+            }
+
+            /* 좌상단 */
+            .top-left-big {
+                top: 0;
+                left: 0;
+
+                font-size: 34px;
+                font-weight: 300;
+            }
+
+            /* 좌상단 작은 텍스트 */
+            .top-left-small {
+                top: 60px;
+                left: 0;
+
+                font-size: 18px;
+            }
+
+            /* 우상단 */
+            .top-right-small {
+                top: 0;
+                right: 0;
+
+                font-size: 16px;
+            }
+
+            /* 좌하단 */
+            .bottom-left-big {
+                left: 0;
+                bottom: 0;
+
+                font-size: 52px;
+                font-weight: 700;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div class="screen">
+            <div class="text top-left-big">AaBbCcDdEeFf012345</div>
+
+            <div class="text top-left-small">AaBbCcDdEeFf012345</div>
+
+            <div class="text top-right-small">AaBbCcDdEeFf012345</div>
+
+            <div class="text bottom-left-big">AaBbCcDdEeFf012345</div>
+        </div>
+    </body>
+</html>
