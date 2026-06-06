@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+    <head>
+        <meta charset="UTF-8" />
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            body {
+                font-family: Pretendard, Arial, sans-serif;
+            }
+            .screen {
+                padding: 60px;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }
+
+            /* 헤더: 제목+부제 왼쪽 / 날짜 오른쪽, 둘 다 위로 정렬 */
+            .header {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+                margin-bottom: 130px;
+            }
+            .header-left {
+                display: flex;
+                flex-direction: column;
+                gap: 20px;
+            }
+            .top-left-big {
+                font-size: 28px;
+                font-weight: 700;
+                letter-spacing: -0.05em;
+                white-space: nowrap;
+            }
+            .top-left-small {
+                margin-top: -10px;
+                font-size: 18px;
+            }
+            .top-right-small {
+                margin-top: 4px;
+                font-size: 16px;
+                white-space: nowrap;
+            }
+
+            /* 본문 */
+            .contents {
+                flex: 1;
+                max-width: 600px;
+                font-size: 18px;
+                font-weight: 300;
+                line-height: 1.8;
+                margin-bottom: 60px;
+            }
+
+            /* 하단: 내용이 길어지면 자연스럽게 밀려 내려감 */
+            .bottom-left-big {
+                font-size: 18px;
+                font-weight: 700;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="screen">
+            <div class="header">
+                <div class="header-left">
+                    <div class="top-left-big">
+                        내일 주인공 녀석과 대면할 예정이다
+                    </div>
+                    <div class="top-left-small">어찌저지 살아야지.</div>
+                </div>
+                <div class="top-right-small">2026년 1월</div>
+            </div>
+
+            <div class="contents">
+                나는 악당이므로 그에 걸맞는 악당 의자가 있어야 한다. 나는 의자에
+                우아하게 앉아 있고 주인공은 심판을 기다리는 죄수처럼 서 있지.
+                의자 팔걸이에서 조그만 비밀 문이 열리면서 버튼이 튀어 나온다.
+                나는 동그란 두번째 버튼을 누른다. 바닥이 쩍 갈라지면서 주인공은
+                악어가 있는 동굴로 떨어진다. 그 녀석은 어찌저찌 곤경을 뚫고
+                빠져나가고, 이 물리 법칙같은 영웅 이야기에서 내가 설 자리는
+                없지만, 그거야 내 사정이니 아무에게도 책임을 묻지는 않겠다.
+                아무튼 나는 그 의자를 중세 교황의 권위가 절정에 달하던 시절의
+                고풍스러운 디자인으로 결정하였다. 의상과 메이크업은 전위가
+                넘치는 톤으로 상의하였다. 대결의 절정은 나의 악에 대한 순수한
+                웃음과 주인공의 정의에 찬 부들거림으로 채워 지겠지. 그렇다. 그는
+                항상 결연하고 진지하며 유머란 도통 걸 모르지. 난 항상 웃는데.
+                아랫배에 올라오는 그의 발성을 상상하면 벌써부터 머리가
+                지끈지끈하다. 나는 속으로 조그맣게 중얼거릴 뿐. '자네는
+                여전하군. 그 진지함이 때로는 가장 큰 비극이라는 걸, 언제쯤
+                깨달으려나?' 나는 그 녀석의 시끌벅적 요란한 최후의 일격에
+                저항하지만 결국 반짝거리는 가루가 되어 공중에서 우아하게
+                흩날리겠지. 불멸의 주인공은 결코 알 수 없는, 이 세상의 순간적
+                아름다움을 아쉬워하며 나, 악당은 사라지겠지.
+            </div>
+
+            <div class="bottom-left-big">은는이가</div>
+        </div>
+    </body>
+</html>
