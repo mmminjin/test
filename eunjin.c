@@ -1,8 +1,12 @@
-/* gcc eunjin.c glad.c -o eunjin -I./include -L./lib -lSDL2 -lopengl32 -Wall -Werror -std=c99 */
+/* gcc eunjin.c glad.c -o eunjin -I./include -L./lib -lSDL2 -lopengl32 -lm -Wall -Werror -std=c99 */
 
 #define SDL_MAIN_HANDLED
 #define STB_IMAGE_IMPLEMENTATION
 #define TINYOBJ_LOADER_C_IMPLEMENTATION
+
+#ifndef _USE_MATH_DEFINES // 💡 <math.h>가 M_PI를 로드할 수 있도록 이 라인을 추가
+#define _USE_MATH_DEFINES
+#endif
 
 #include <SDL2/SDL_video.h>
 #include <stdio.h>
@@ -163,6 +167,12 @@ typedef struct {
 
 void shader_program_resolve_uniforms(ShaderProgram *prog);
 
+/* Asset 추가하는 법
+1. enum에 항목 하나 추가 (MESH_CHAIR 같은)
+2. 이름 테이블에 한 줄 ([MESH_CHAIR] = "chair")
+3. assets.txt에 한 줄 (MESH chair chair.obj has_normal=true)
+*/
+
 typedef enum {
     MESH_QUAD,
     MESH_PLANE,
@@ -222,11 +232,11 @@ typedef struct {
     bool proj_dirty;  // fov/aspect/near/far 바뀌면 true
 } Camera;
 
-
 static void vec3_sub(float out[3], const float a[3], const float b[3]);
 static float vec3_dot(const float a[3], const float b[3]);
 static void vec3_cross(float out[3], const float a[3], const float b[3]);
 static void vec3_normalize(float v[3]);
+float degree_to_rad(float degrees);
 void mat4_look_at(Mat4 *out, const float eye[3], const float target[3], const float world_up[3]);
 void camera_update_view(Camera *camera);
 void camera_update_proj(Camera *camera);
@@ -260,9 +270,9 @@ typedef void (*update_callback_function)(RenderObject *obj, SceneContext *ctx, f
 typedef void (*destroy_callback_function)(void *user_data);
 
 typedef struct {
-    update_callback_function updates[4]; // 필요한 만큼
+    update_callback_function update_functions[4]; // 필요한 만큼
     int update_count;
-    destroy_callback_function destroy;
+    destroy_callback_function destroy_function;
 } ObjectCallbacks;
 
 struct RenderObject {
@@ -271,7 +281,7 @@ struct RenderObject {
     Material *material;
 
     ObjectCallbacks *callbacks;
-    void *user_data;
+    void *user_data; // RenderObject owns user_data
     // uinit32 componet_mask; // ecs
 };
 
@@ -303,8 +313,6 @@ void bob_data_destroy(void *user_data) {
 
 void render_object_draw(RenderObject *obj, SceneContext *ctx);
 
-
-
 typedef struct {
     GLuint fbo;
     GLuint rbo;
@@ -320,25 +328,6 @@ void texture_destroy(GLuint *);
 GLuint shader_program_create(const char *, const char *);
 void shader_program_destroy(GLuint);
 
-// todo
-// typedef struct {
-//     char key[64];      // 예: "monkey", "girl_diffuse"
-//     void *resource;    // Mesh* 또는 GLuint(Texture ID) 등
-// } AssetEntry;
-
-// typedef struct {
-//     AssetEntry meshes[128];
-//     int mesh_count;
-
-//     AssetEntry textures[128];
-//     int texture_count;
-//
-//      ...
-// } Assets;
-//
-// void assets_add_mesh(Assets *assets, const char *key, Mesh *mesh);
-// Mesh* assets_get_mesh(Assets *assets, const char *key);
-
 typedef struct {
     Mesh* meshes[MESH_COUNT];
     ShaderProgram shaders[SHADER_COUNT];
@@ -348,41 +337,14 @@ typedef struct {
 
 void assets_init(Assets *assets);
 void assets_destroy(Assets *assets);
-
-typedef enum {
-    SCENE_TITLE,
-    SCENE_GAMEPLAY,
-    SCENE_PAUSE,
-    SCENE_COUNT
-} SceneID;
+int find_name_index(const char **names, int count, const char *target);
+void assets_load_manifest(Assets *assets, const char *path);
 
 typedef struct {
     RenderObject *objects;
     int object_count;
     SceneContext context;
-    // int SceneID;
 } Scene;
-
-// 팩토리 패턴: SceneID -> SceneDescriptor 생성 함수 매핑
-typedef Scene *(*scene_factory_fn)(Assets *assets, Camera *camera);
-
-typedef struct {
-    scene_factory_fn factories[SCENE_COUNT];
-} SceneRegistry;
-
-typedef enum { TRANSITION_NONE, TRANSITION_FADE_OUT, TRANSITION_FADE_IN } TransitionState;
-
-typedef struct {
-    Scene *current;
-    SceneID current_id;
-    SceneID pending_id;      // 전환 목표
-    TransitionState transition;
-    float transition_t;      // 0~1 진행도
-} SceneManager;
-
-void scene_manager_request_switch(SceneManager *mgr, SceneID next);
-void scene_manager_update(SceneManager *mgr, Assets *assets, Camera *camera, float dt);
-Scene *scene_manager_current(SceneManager *mgr);
 
 void scene_update(Scene *scene, float dt);
 
@@ -412,7 +374,6 @@ typedef struct {
 Scene *scene_create(Assets *assets, Camera *camera, SceneDescriptor *desc);
 void scene_destroy(Scene **scene);
 
-
 typedef struct {
     Framebuffer offscreen;  // 씬을 먼저 담을 임시 버퍼
     Mesh *screen_quad;      // 화면 전체를 덮는 사각형 메시
@@ -431,7 +392,6 @@ typedef struct {
 Renderer *renderer_create(Assets *assets, RenderDescriptor *desc);
 void renderer_destroy(Renderer *r);
 void renderer_resize(Renderer *r, int width, int height);
-
 void renderer_draw_objects(Renderer *r, RenderObject *objects, int count, SceneContext *ctx);
 void renderer_present(Renderer *r, int screen_width, int screen_height); // offscreen -> 기본 프레임버퍼로 post_shader 적용해서 blit
 
@@ -461,10 +421,10 @@ int main(int argc, char *argv[]) {
     camera_set_position(&main_camera, 0.0f, 1.5f, 5.0f);
     camera_set_target(&main_camera, 0, 0, 0);
 
-    static ObjectCallbacks movement_callback = {
-        .updates = { object_rotate, object_bob },
+    static ObjectCallbacks hovering_callback = {
+        .update_functions = { object_rotate, object_bob },
         .update_count = 2,
-        .destroy = bob_data_destroy
+        .destroy_function = bob_data_destroy
     };
 
     /*
@@ -473,6 +433,7 @@ int main(int argc, char *argv[]) {
      * malloc된 데이터는 절대 공유하면 안 돼요.
      *  "콜백은 타입 단위 공유,
      * user_data는 인스턴스 단위"라는 원칙 그대로예요.
+     * 행동(코드)은 공유하고, 상태(데이터)는 공유하지 마라.
      */
     BobData *data1 = malloc(sizeof(BobData));
     data1->phase = 0;
@@ -491,7 +452,7 @@ int main(int argc, char *argv[]) {
             .position = {1.0f, 0.0f, 0.0f},
             .rotation = {0.0f, 0.0f, 0.0f},
             .scale = {2.0f, 2.0f, 1.0f},
-            .callbacks = &movement_callback,
+            .callbacks = &hovering_callback,
             .user_data = data1
         },
         {
@@ -507,7 +468,7 @@ int main(int argc, char *argv[]) {
             .position = {-1.0f, 0.0f, 0.0f},
             .rotation = {0.0f, 0.0f, 0.0f},
             .scale = {1.0f, 1.0f, 1.0f},
-            .callbacks = &movement_callback,
+            .callbacks = &hovering_callback,
             .user_data = data2
         },
         {
@@ -999,6 +960,8 @@ void vertex_binding_destroy(VertexBinding *binding) {
 }
 
 void render_object_draw(RenderObject *obj, SceneContext *ctx) {
+    if (!obj || !obj->mesh || !obj->mesh->uploaded) return;
+
     transform_ensure_updated(&obj->transform);
 
     ShaderProgram *prog = obj->material->shader;
@@ -1097,8 +1060,8 @@ void scene_update(Scene *scene, float dt) {
 
         if (obj->callbacks) {
             for (int j = 0; j < obj->callbacks->update_count; j++) {
-                if (obj->callbacks->updates[j])
-                    obj->callbacks->updates[j](obj, &scene->context, dt);
+                if (obj->callbacks->update_functions[j])
+                    obj->callbacks->update_functions[j](obj, &scene->context, dt);
             }
         }
     }
@@ -1135,8 +1098,8 @@ void scene_destroy(Scene **scene) {
 
     for (int i = 0; i < (*scene)->object_count; i++) {
         RenderObject *obj = &(*scene)->objects[i];
-        if (obj->callbacks && obj->callbacks->destroy) {
-            obj->callbacks->destroy(obj->user_data);
+        if (obj->callbacks && obj->callbacks->destroy_function) {
+            obj->callbacks->destroy_function(obj->user_data);
         }
     }
 
@@ -1369,7 +1332,7 @@ void camera_init(Camera *camera, float aspect) {
         .up = {0.0f, 1.0f, 0.0f},
 
         /* proj 가 바뀌면 camera_update_proj() 호출 */
-        .fov = 45.0f * 3.141592f / 180.0f,
+        .fov = degree_to_rad(45.0f),
         .aspect = aspect,
         .near_plane = 0.1f,
         .far_plane = 100.0f,
@@ -1405,6 +1368,10 @@ static void vec3_normalize(float v[3]) {
         v[1] /= len;
         v[2] /= len;
     }
+}
+
+float degree_to_rad(float degrees) {
+    return degrees * M_PI / 180.0f;
 }
 
 void mat4_look_at(Mat4 *out, const float eye[3], const float target[3], const float world_up[3]) {
@@ -1534,6 +1501,64 @@ static float screen_quad_verts[] = {
 };
 static GLuint screen_quad_indices[] = {0, 3, 2, 0, 2, 1};
 
+/* mesh_names: enum 값에 따른 mesh 이름 테이블-- 여기서 추가 */
+
+static const char *mesh_names[MESH_COUNT] = {
+    [MESH_MONKEY] = "monkey",
+    [MESH_SPHERE] = "sphere",
+};
+static const char *shader_names[SHADER_COUNT] = {
+    [SHADER_TEXTURE]     = "texture",
+    [SHADER_PHONG]       = "phong",
+    [SHADER_POST_INVERT] = "post_invert",
+};
+static const char *texture_names[TEX_COUNT] = {
+    [TEX_GIRL] = "girl",
+};
+
+int find_name_index(const char **names, int count, const char *target) {
+    for (int i = 0; i < count; i++) {
+        if (names[i] && strcmp(names[i], target) == 0) return i;
+    }
+    return -1;
+}
+
+void assets_load_manifest(Assets *assets, const char *path) {
+    FILE *file = fopen(path, "r");
+    if (!file) {
+        printf("Warning: manifest not found: %s\n", path);
+        return;
+    }
+
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+
+        char type[16], key[64], arg1[128], arg2[128] = "";
+        int fields = sscanf(line, "%15s %63s %127s %127s", type, key, arg1, arg2);
+        if (fields < 3) continue;
+
+        if (strcmp(type, "MESH") == 0) {
+            int id = find_name_index(mesh_names, MESH_COUNT, key);
+            if (id < 0) { printf("Warning: unknown mesh key '%s'\n", key); continue; }
+            bool has_normal = strstr(arg2, "has_normal=true") != NULL;
+            assets->meshes[id] = load_obj_with_tinyobj(arg1, has_normal);
+
+        } else if (strcmp(type, "TEXTURE") == 0) {
+            int id = find_name_index(texture_names, TEX_COUNT, key);
+            if (id < 0) { printf("Warning: unknown texture key '%s'\n", key); continue; }
+            assets->textures[id] = texture_create(arg1);
+
+        } else if (strcmp(type, "SHADER") == 0) {
+            int id = find_name_index(shader_names, SHADER_COUNT, key);
+            if (id < 0) { printf("Warning: unknown shader key '%s'\n", key); continue; }
+            assets->shaders[id].id = shader_program_create(arg1, arg2);
+            shader_program_resolve_uniforms(&assets->shaders[id]);
+        }
+    }
+    fclose(file);
+}
+
 void assets_init(Assets *assets) {
 
     MeshDescriptor quad_desc = {
@@ -1560,10 +1585,6 @@ void assets_init(Assets *assets) {
     };
     assets->meshes[MESH_PLANE] = mesh_create(&ground_desc);
 
-    assets->meshes[MESH_MONKEY] = load_obj_with_tinyobj("monkey.obj", true);
-
-    assets->meshes[MESH_SPHERE] = load_obj_with_tinyobj("sphere.obj", true);
-
     MeshDescriptor screen_quad_desc = {
         .vertices = screen_quad_verts, .vertex_bytes = sizeof(screen_quad_verts),
         .stride = sizeof(float) * 5,
@@ -1573,24 +1594,13 @@ void assets_init(Assets *assets) {
     };
     assets->meshes[MESH_SCREEN_QUAD] = mesh_create(&screen_quad_desc);
 
+    // 파일 기반 리소스는 매니페스트에서 한 번에
+    assets_load_manifest(assets, "assets.txt");
+
     for (int i = 0; i < MESH_COUNT; i++) {
         if (assets->meshes[i]) mesh_upload(assets->meshes[i]);
         else printf("Warning: mesh %d failed to load\n", i);
     }
-
-    /* ---- Textures ---- */
-    assets->textures[TEX_GIRL]  = texture_create("girl2.jpg");
-    //assets->textures[TEX_BRICK] = texture_create("brick.jpg");
-
-    /* ---- Shaders ---- */
-    assets->shaders[SHADER_TEXTURE].id = shader_program_create("texture1.vert", "texture1.frag");
-    shader_program_resolve_uniforms(&assets->shaders[SHADER_TEXTURE]);
-
-    assets->shaders[SHADER_PHONG].id = shader_program_create("phong.vert", "phong.frag");
-    shader_program_resolve_uniforms(&assets->shaders[SHADER_PHONG]);
-
-    assets->shaders[SHADER_POST_INVERT].id = shader_program_create("post.vert", "post.frag");
-    shader_program_resolve_uniforms(&assets->shaders[SHADER_POST_INVERT]);
 
     /* ---- Materials ---- */
     assets->materials[MAT_TEXTURE] = (Material){
@@ -1635,33 +1645,6 @@ Mesh *assets_get_mesh(Assets *assets, const char *key) {
     }
     return NULL;
 }
-
-asset.txt
-* [type] [key] [filepath] [options]
-* MESH monkey monkey.obj has_normal=true
-* TEXTURE girl girl.png filter=linear
-* SHADER phong phong #vert/frag
-
-void assets_load_from_manifest(Assets *assets, const char *manifest_path) {
-    FILE *file = fopen(manifest_path, "r");
-    if (!file) return;
-
-    char line[256];
-    while (fgets(line, sizeof(line), file)) {
-        char type[16], key[64], filepath[256], options[256];
-        sscanf(line, "%15s %63s %255s %255s", type, key, filepath, options);
-        if(type == MESH) {
-            Mesh *mesh = load_obj_.....
-            assets_add_mesh(assets, key, mesh);
-        } else if(type == TEXTURE) {
-            GLuint t = texture_create(filepath);
-            assets_add_texture(assets, key, t);
-        } else if(type == SHADER) {.....
-        }
-    }
-    fclose(file);
-}
-
 */
 
 Renderer *renderer_create(Assets *assets, RenderDescriptor *desc) {
