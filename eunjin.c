@@ -392,7 +392,7 @@ typedef struct {
 Renderer *renderer_create(Assets *assets, RenderDescriptor *desc);
 void renderer_destroy(Renderer *r);
 void renderer_resize(Renderer *r, int width, int height);
-void renderer_draw_objects(Renderer *r, RenderObject *objects, int count, SceneContext *ctx);
+void renderer_render_pass(Renderer *r, RenderObject *objects, int count, SceneContext *ctx);
 void renderer_present(Renderer *r, int screen_width, int screen_height); // offscreen -> 기본 프레임버퍼로 post_shader 적용해서 blit
 
 typedef struct {
@@ -501,6 +501,10 @@ int main(int argc, char *argv[]) {
         .post_shader = SHADER_POST_INVERT,
     };
     Renderer *renderer = renderer_create(&assets, &render_desc);
+    if (!renderer) {
+        fprintf(stderr, "renderer_create failed\n");
+        exit(1); // 또는 적절한 종료 처리
+    }
     renderer->post_enabled = true; // 시작 상태
 
     glViewport(0, 0, app.window_width, app.window_height);
@@ -530,7 +534,7 @@ int main(int argc, char *argv[]) {
 
         scene_update(scene1, delta_time);
 
-        renderer_draw_objects(renderer, scene1->objects, scene1->object_count, &scene1->context);
+        renderer_render_pass(renderer, scene1->objects, scene1->object_count, &scene1->context);
         renderer_present(renderer, app.window_width, app.window_height);
 
         SDL_GL_SwapWindow(app.window);
@@ -560,7 +564,7 @@ AppContext app_context_create(int window_width, int window_height) {
     app.window = SDL_CreateWindow(
         "Eunjin",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        app.window_width, window_height,
+        app.window_width, app.window_height,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE
     );
     if(!app.window) goto fail_window;
@@ -617,16 +621,29 @@ void mat4_identity(Mat4 *m) {
 void mat4_multiply(Mat4 *out, const Mat4 *a, const Mat4 *b) {
     Mat4 tmp = {0};
 
-    #pragma GCC unroll 4  /*  GCC/Clang에서 루프를 풀어내도록 유도 */
-    for(int col = 0; col < 4; col++) {
-        #pragma GCC unroll 4
-        for(int row = 0; row < 4; row++) {
-            #pragma GCC unroll 4
-            for(int k = 0; k < 4; k++) {
-                tmp.data[col * 4 + row] += a->data[k * 4 + row] * b->data[col * 4 + k];
-            }
-        }
-    }
+    // Column 0 (b->data[0], [1], [2], [3]과 a의 각 열들의 선형 결합)
+    tmp.data[0]  = a->data[0] * b->data[0] + a->data[4] * b->data[1] + a->data[8]  * b->data[2] + a->data[12] * b->data[3];
+    tmp.data[1]  = a->data[1] * b->data[0] + a->data[5] * b->data[1] + a->data[9]  * b->data[2] + a->data[13] * b->data[3];
+    tmp.data[2]  = a->data[2] * b->data[0] + a->data[6] * b->data[1] + a->data[10] * b->data[2] + a->data[14] * b->data[3];
+    tmp.data[3]  = a->data[3] * b->data[0] + a->data[7] * b->data[1] + a->data[11] * b->data[2] + a->data[15] * b->data[3];
+
+    // Column 1
+    tmp.data[4]  = a->data[0] * b->data[4] + a->data[4] * b->data[5] + a->data[8]  * b->data[6] + a->data[12] * b->data[7];
+    tmp.data[5]  = a->data[1] * b->data[4] + a->data[5] * b->data[5] + a->data[9]  * b->data[6] + a->data[13] * b->data[7];
+    tmp.data[6]  = a->data[2] * b->data[4] + a->data[6] * b->data[5] + a->data[10] * b->data[6] + a->data[14] * b->data[7];
+    tmp.data[7]  = a->data[3] * b->data[4] + a->data[7] * b->data[5] + a->data[11] * b->data[6] + a->data[15] * b->data[7];
+
+    // Column 2
+    tmp.data[8]  = a->data[0] * b->data[8] + a->data[4] * b->data[9] + a->data[8]  * b->data[10] + a->data[12] * b->data[11];
+    tmp.data[9]  = a->data[1] * b->data[8] + a->data[5] * b->data[9] + a->data[9]  * b->data[10] + a->data[13] * b->data[11];
+    tmp.data[10] = a->data[2] * b->data[8] + a->data[6] * b->data[9] + a->data[10] * b->data[10] + a->data[14] * b->data[11];
+    tmp.data[11] = a->data[3] * b->data[8] + a->data[7] * b->data[9] + a->data[11] * b->data[10] + a->data[15] * b->data[11];
+
+    // Column 3
+    tmp.data[12] = a->data[0] * b->data[12] + a->data[4] * b->data[13] + a->data[8]  * b->data[14] + a->data[12] * b->data[15];
+    tmp.data[13] = a->data[1] * b->data[12] + a->data[5] * b->data[13] + a->data[9]  * b->data[14] + a->data[13] * b->data[15];
+    tmp.data[14] = a->data[2] * b->data[12] + a->data[6] * b->data[13] + a->data[10] * b->data[14] + a->data[14] * b->data[15];
+    tmp.data[15] = a->data[3] * b->data[12] + a->data[7] * b->data[13] + a->data[11] * b->data[14] + a->data[15] * b->data[15];
 
     *out = tmp;
 }
@@ -1008,7 +1025,7 @@ void render_object_draw(RenderObject *obj, SceneContext *ctx) {
     glBindVertexArray(0);
 }
 
-void renderer_draw_objects(Renderer *r, RenderObject *objects, int count, SceneContext *ctx) {
+void renderer_render_pass(Renderer *r, RenderObject *objects, int count, SceneContext *ctx) {
     glBindFramebuffer(GL_FRAMEBUFFER, r->offscreen.fbo);
     glViewport(0, 0, r->width, r->height);
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
@@ -1055,8 +1072,17 @@ void scene_update(Scene *scene, float dt) {
 
     for(int i=0;i<scene->object_count;i++)
     {
-        RenderObject *obj =
-            &scene->objects[i];
+        RenderObject *obj =  &scene->objects[i];
+        // 이 코드는 새로운 객체를 복사해서 만드는 것이 아니라,
+        // 이미 메모리에 자리 잡고 있는 동적 배열의 i번째 칸 주소를
+        // obj에게 잠시 알려준 것뿐입니다.
+        // obj는 주소만 임시로 담아 조작하기 위해 쓴
+        // **'스택의 징검다리 변수'**일 뿐이므로 함수가 끝나면 알아서 사라집니다.
+        // 진짜 데이터는 **힙(Heap)**에 안전하게 보존되어
+        //  다음 프레임의 renderer_render_pass 등에서 정상적으로 그려지게 됩니다!
+        // C언어에서 RenderObject *obj = &scene->objects[i];와
+        // 같이 작성하는 것은 오직 가독성 향상, 타이핑 간소화,
+        // 그리고 컴파일러의 최적화 유도를 위해 내부적으로 주소만 임시로 붙여둔 것에 불과합니다.
 
         if (obj->callbacks) {
             for (int j = 0; j < obj->callbacks->update_count; j++) {
@@ -1131,6 +1157,11 @@ Framebuffer framebuffer_create(int width, int height) {
 
     if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
        printf("Framebuffer incomplete\n");
+       glDeleteFramebuffers(1, &fbo);
+       glDeleteTextures(1, &color_tex);
+       glDeleteRenderbuffers(1, &rbo);
+       glBindFramebuffer(GL_FRAMEBUFFER, 0);
+       return (Framebuffer){0};
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1649,7 +1680,22 @@ Mesh *assets_get_mesh(Assets *assets, const char *key) {
 
 Renderer *renderer_create(Assets *assets, RenderDescriptor *desc) {
     Renderer *r = calloc(1, sizeof(Renderer));
+    if(!r) return NULL;
+
+    // return 전까지 r의 소유권은 누구에게도 없음.
+    // 이 함수가 성공적으로 return r; 할 때 비로소 소유권이 호출자(main)에게 넘어감.
+    // 메모리 해제는 main에서 해야 함.
+    // return 전까지는 r의 소유권을 누구에게도 안 줌.
+    // 이 함수 내부에서만 free(r) 가능.
+    // renderer_destroy함수가 있으니까 거기서 free해야함
+    // 내가 정하는거임. 포인터 꼬임 방지(dangling pointer, double free, use-after-free)위해서
+
     r->offscreen = framebuffer_create(desc->width, desc->height);
+    if (r->offscreen.fbo == 0) {
+        printf("fb == 0\n");
+        free(r);
+        return NULL;
+    }
     r->post_shader = &assets->shaders[desc->post_shader];
     r->screen_quad = assets->meshes[MESH_SCREEN_QUAD];
     r->width = desc->width;
@@ -1658,10 +1704,14 @@ Renderer *renderer_create(Assets *assets, RenderDescriptor *desc) {
 }
 
 void renderer_resize(Renderer *r, int width, int height) {
-    if (r->width == width && r->height == height) return; // 크기 안 바뀌었으면 스킵
+    if (r->width == width && r->height == height) return;
 
     framebuffer_destroy(&r->offscreen);
     r->offscreen = framebuffer_create(width, height);
+    if (r->offscreen.fbo == 0) {
+        printf("resize failed, offscreen framebuffer invalid\n");
+        return; // r 자체는 건드리지 않음 — 살아있는 포인터니까
+    }
     r->width = width;
     r->height = height;
 }
