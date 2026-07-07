@@ -265,24 +265,42 @@ typedef struct {
     float time;
 } SceneContext;
 
-typedef struct RenderObject RenderObject;
-typedef void (*update_callback_function)(RenderObject *obj, SceneContext *ctx, float dt);
+typedef struct Entity Entity;
+typedef void (*update_callback_function)(Entity *entity, SceneContext *ctx, float dt);
 typedef void (*destroy_callback_function)(void *user_data);
 
 typedef struct {
     update_callback_function update_functions[4]; // 필요한 만큼
     int update_count;
     destroy_callback_function destroy_function;
-} ObjectCallbacks;
+} EntityCallbacks;
 
-struct RenderObject {
+// typedef struct Behaviour Behaviour;
+// typedef struct {
+//     void (*update)(Entity *,void *, SceneContext *, float);
+//     void (*destroy)(void *);
+//     void *data;
+// } Behaviour;
+
+// typedef struct {
+//     Behaviour behaviours[8];
+//     int behaviour_count;
+// } BehaviourSet;
+//
+// Entity
+//   └ behaviours[]
+//        ├ update
+//        ├ destroy
+//        └ data
+
+struct Entity {
     Transform transform;
     Mesh *mesh;
     Material *material;
 
-    ObjectCallbacks *callbacks;
-    void *user_data; // RenderObject owns user_data
-    // uinit32 componet_mask; // ecs
+    EntityCallbacks *callbacks;
+    void *user_data; // Entity owns user_data
+    //  BehaviourSet behaviour; // ecs
 };
 
 typedef struct {
@@ -290,19 +308,19 @@ typedef struct {
     float speed;
 } BobData;
 
-void object_rotate(RenderObject *obj, SceneContext *ctx, float dt) {
-    obj->transform.rot[1] += dt;
-    obj->transform.dirty = true;
+void entity_rotate(Entity *entity, SceneContext *ctx, float dt) {
+    entity->transform.rot[1] += dt;
+    entity->transform.dirty = true;
 }
 
-void object_bob(RenderObject *obj, SceneContext *ctx, float dt) {
-    BobData *b = obj->user_data;
+void entity_bob(Entity *entity, SceneContext *ctx, float dt) {
+    BobData *b = entity->user_data;
     b->phase += dt * b->speed;
 
-    //obj->transform.pos[1]= sinf(ctx->time);
-    obj->transform.pos[1] = sinf(b->phase);
+    //entity->transform.pos[1]= sinf(ctx->time);
+    entity->transform.pos[1] = sinf(b->phase);
 
-    obj->transform.dirty = true;
+    entity->transform.dirty = true;
 }
 
 void bob_data_destroy(void *user_data) {
@@ -310,8 +328,6 @@ void bob_data_destroy(void *user_data) {
     BobData *b = (BobData *)user_data;
     free(b);
 }
-
-void render_object_draw(RenderObject *obj, SceneContext *ctx);
 
 typedef struct {
     GLuint fbo;
@@ -341,8 +357,8 @@ int find_name_index(const char **names, int count, const char *target);
 void assets_load_manifest(Assets *assets, const char *path);
 
 typedef struct {
-    RenderObject *objects;
-    int object_count;
+    Entity *entities;
+    int entity_count;
     SceneContext context;
 } Scene;
 
@@ -355,15 +371,15 @@ typedef struct {
     float rotation[3];
     float scale[3];
 
-    ObjectCallbacks *callbacks;
+    EntityCallbacks *callbacks;
     void *user_data;
-} ObjectDescriptor;
+} EntityDescriptor;
 
-RenderObject render_object_create(Assets *assets, ObjectDescriptor *desc);
+Entity entity_create(Assets *assets, EntityDescriptor *desc);
 
 typedef struct {
-    ObjectDescriptor *objects;
-    int object_count;
+    EntityDescriptor *entities;
+    int entity_count;
 
     float light_pos[3];
     float light_color[3];
@@ -392,14 +408,15 @@ typedef struct {
 Renderer *renderer_create(Assets *assets, RenderDescriptor *desc);
 void renderer_destroy(Renderer *r);
 void renderer_resize(Renderer *r, int width, int height);
-void renderer_render_pass(Renderer *r, RenderObject *objects, int count, SceneContext *ctx);
+void renderer_draw_entity(Entity *entity, SceneContext *ctx);
+void renderer_render_pass(Renderer *r, Entity *entities, int count, SceneContext *ctx);
 void renderer_present(Renderer *r, int screen_width, int screen_height); // offscreen -> 기본 프레임버퍼로 post_shader 적용해서 blit
 
 typedef struct {
-    RenderObject **opaque;
+    Entity **opaque;
     int opaque_count;
 
-    RenderObject **transparent;
+    Entity **transparent;
     int transparent_count;
 } RenderQueue;
 
@@ -421,8 +438,8 @@ int main(int argc, char *argv[]) {
     camera_set_position(&main_camera, 0.0f, 1.5f, 5.0f);
     camera_set_target(&main_camera, 0, 0, 0);
 
-    static ObjectCallbacks hovering_callback = {
-        .update_functions = { object_rotate, object_bob },
+    static EntityCallbacks hovering_callback = {
+        .update_functions = { entity_rotate, entity_bob },
         .update_count = 2,
         .destroy_function = bob_data_destroy
     };
@@ -445,7 +462,7 @@ int main(int argc, char *argv[]) {
 
 
 
-    ObjectDescriptor scene1_objects[] = {
+    EntityDescriptor scene1_entities[] = {
         {
             .mesh = MESH_QUAD,
             .material = MAT_TEXTURE,
@@ -481,8 +498,8 @@ int main(int argc, char *argv[]) {
     };
 
     SceneDescriptor scene1_desc = {
-        .objects = scene1_objects,
-        .object_count = sizeof(scene1_objects) / sizeof(scene1_objects[0]),
+        .entities = scene1_entities,
+        .entity_count = sizeof(scene1_entities) / sizeof(scene1_entities[0]),
         .light_pos   = {2.0f, 4.0f, 5.0f},
         .light_color = {1.0f, 1.0f, 1.0f},
     };
@@ -534,7 +551,7 @@ int main(int argc, char *argv[]) {
 
         scene_update(scene1, delta_time);
 
-        renderer_render_pass(renderer, scene1->objects, scene1->object_count, &scene1->context);
+        renderer_render_pass(renderer, scene1->entities, scene1->entity_count, &scene1->context);
         renderer_present(renderer, app.window_width, app.window_height);
 
         SDL_GL_SwapWindow(app.window);
@@ -976,20 +993,20 @@ void vertex_binding_destroy(VertexBinding *binding) {
         glDeleteBuffers(1, &binding->ebo);
 }
 
-void render_object_draw(RenderObject *obj, SceneContext *ctx) {
-    if (!obj || !obj->mesh || !obj->mesh->uploaded) return;
+void renderer_draw_entity(Entity *entity, SceneContext *ctx) {
+    if (!entity || !entity->mesh || !entity->mesh->uploaded) return;
 
-    transform_ensure_updated(&obj->transform);
+    transform_ensure_updated(&entity->transform);
 
-    ShaderProgram *prog = obj->material->shader;
-    glUseProgram(prog->id); // obj->material->shader->id
+    ShaderProgram *prog =entity->material->shader;
+    glUseProgram(prog->id); // entity->material->shader->id
 
     glUniformMatrix4fv(prog->locations[U_VIEW], 1, GL_FALSE, ctx->camera->view.data);
     glUniformMatrix4fv(prog->locations[U_PROJ], 1, GL_FALSE, ctx->camera->proj.data);
-    glUniformMatrix4fv(prog->locations[U_MODEL], 1, GL_FALSE, obj->transform.model.data);
+    glUniformMatrix4fv(prog->locations[U_MODEL], 1, GL_FALSE, entity->transform.model.data);
 
     if(prog->locations[U_OBJ_COLOR] != -1)
-        glUniform3fv(prog->locations[U_OBJ_COLOR], 1, obj->material->color);
+        glUniform3fv(prog->locations[U_OBJ_COLOR], 1, entity->material->color);
 
     if(prog->locations[U_LIGHT_POS] != -1)
         glUniform3fv(prog->locations[U_LIGHT_POS], 1, ctx->light_pos);
@@ -1006,9 +1023,9 @@ void render_object_draw(RenderObject *obj, SceneContext *ctx) {
     if(prog->locations[U_TIME] != -1)
         glUniform1f(prog->locations[U_TIME], ctx->time);
 
-    if(obj->material->texture != 0) {
+    if(entity->material->texture != 0) {
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, obj->material->texture);
+        glBindTexture(GL_TEXTURE_2D, entity->material->texture);
         if(prog->locations[U_DIFFUSE_TEX] != -1)
             glUniform1i(prog->locations[U_DIFFUSE_TEX], 0);
     } else {
@@ -1017,22 +1034,22 @@ void render_object_draw(RenderObject *obj, SceneContext *ctx) {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
-    glBindVertexArray(obj->mesh->binding.vao);
-    if(obj->mesh->binding.ebo != 0)
-        glDrawElements(GL_TRIANGLES, obj->mesh->index_count, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(entity->mesh->binding.vao);
+    if(entity->mesh->binding.ebo != 0)
+        glDrawElements(GL_TRIANGLES, entity->mesh->index_count, GL_UNSIGNED_INT, 0);
     else
-        glDrawArrays(GL_TRIANGLES, 0, obj->mesh->vertex_count);
+        glDrawArrays(GL_TRIANGLES, 0, entity->mesh->vertex_count);
     glBindVertexArray(0);
 }
 
-void renderer_render_pass(Renderer *r, RenderObject *objects, int count, SceneContext *ctx) {
+void renderer_render_pass(Renderer *r, Entity *entities, int count, SceneContext *ctx) {
     glBindFramebuffer(GL_FRAMEBUFFER, r->offscreen.fbo);
     glViewport(0, 0, r->width, r->height);
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     for (int i = 0; i < count; i++) {
-        render_object_draw(&objects[i], ctx);
+        renderer_draw_entity(&entities[i], ctx);
     }
 }
 
@@ -1070,24 +1087,24 @@ void scene_update(Scene *scene, float dt) {
     // 2. 카메라 상태 업데이트 및 행렬 재계산
     camera_ensure_updated(scene->context.camera);
 
-    for(int i=0;i<scene->object_count;i++)
+    for(int i=0;i<scene->entity_count;i++)
     {
-        RenderObject *obj =  &scene->objects[i];
+        Entity *entity =  &scene->entities[i];
         // 이 코드는 새로운 객체를 복사해서 만드는 것이 아니라,
         // 이미 메모리에 자리 잡고 있는 동적 배열의 i번째 칸 주소를
-        // obj에게 잠시 알려준 것뿐입니다.
-        // obj는 주소만 임시로 담아 조작하기 위해 쓴
+        // entity에게 잠시 알려준 것뿐입니다.
+        // endtity는 주소만 임시로 담아 조작하기 위해 쓴
         // **'스택의 징검다리 변수'**일 뿐이므로 함수가 끝나면 알아서 사라집니다.
         // 진짜 데이터는 **힙(Heap)**에 안전하게 보존되어
         //  다음 프레임의 renderer_render_pass 등에서 정상적으로 그려지게 됩니다!
-        // C언어에서 RenderObject *obj = &scene->objects[i];와
+        // C언어에서 Entity *entity = &scene->enties[i];와
         // 같이 작성하는 것은 오직 가독성 향상, 타이핑 간소화,
         // 그리고 컴파일러의 최적화 유도를 위해 내부적으로 주소만 임시로 붙여둔 것에 불과합니다.
 
-        if (obj->callbacks) {
-            for (int j = 0; j < obj->callbacks->update_count; j++) {
-                if (obj->callbacks->update_functions[j])
-                    obj->callbacks->update_functions[j](obj, &scene->context, dt);
+        if (entity->callbacks) {
+            for (int j = 0; j < entity->callbacks->update_count; j++) {
+                if (entity->callbacks->update_functions[j])
+                    entity->callbacks->update_functions[j](entity, &scene->context, dt);
             }
         }
     }
@@ -1098,15 +1115,15 @@ Scene *scene_create(Assets *assets, Camera *camera, SceneDescriptor *desc) {
     Scene *scene = (Scene *)calloc(1, sizeof(Scene));
     if (!scene) return NULL;
 
-    scene->object_count = desc->object_count;
-    scene->objects = (RenderObject *)malloc(sizeof(RenderObject) * desc->object_count);
-    if (!scene->objects) {
+    scene->entity_count = desc->entity_count;
+    scene->entities = (Entity *)malloc(sizeof(Entity) * desc->entity_count);
+    if (!scene->entities) {
         free(scene);
         return NULL;
     }
 
-    for (int i = 0; i < desc->object_count; i++) {
-        scene->objects[i] = render_object_create(assets, &desc->objects[i]);
+    for (int i = 0; i < desc->entity_count; i++) {
+        scene->entities[i] = entity_create(assets, &desc->entities[i]);
     }
 
     scene->context = (SceneContext){
@@ -1122,14 +1139,14 @@ Scene *scene_create(Assets *assets, Camera *camera, SceneDescriptor *desc) {
 void scene_destroy(Scene **scene) {
     if (!scene || !*scene) return;
 
-    for (int i = 0; i < (*scene)->object_count; i++) {
-        RenderObject *obj = &(*scene)->objects[i];
-        if (obj->callbacks && obj->callbacks->destroy_function) {
-            obj->callbacks->destroy_function(obj->user_data);
+    for (int i = 0; i < (*scene)->entity_count; i++) {
+        Entity *entity = &(*scene)->entities[i];
+        if (entity->callbacks && entity->callbacks->destroy_function) {
+            entity->callbacks->destroy_function(entity->user_data);
         }
     }
 
-    free((*scene)->objects);
+    free((*scene)->entities);
     free(*scene);
     *scene = NULL;
 }
@@ -1332,19 +1349,19 @@ char *shader_source_load(const char *file_path) {
     return source;
 }
 
-RenderObject render_object_create(Assets *assets, ObjectDescriptor *desc) {
-    RenderObject obj = {0};
-    obj.mesh = assets->meshes[desc->mesh];
-    obj.material = &assets->materials[desc->material];
+Entity entity_create(Assets *assets, EntityDescriptor *desc) {
+    Entity entity = {0};
+    entity.mesh = assets->meshes[desc->mesh];
+    entity.material = &assets->materials[desc->material];
 
-    memcpy(obj.transform.pos,   desc->position, sizeof(float) * 3);
-    memcpy(obj.transform.rot,   desc->rotation, sizeof(float) * 3);
-    memcpy(obj.transform.scale, desc->scale,    sizeof(float) * 3);
-    obj.callbacks = desc->callbacks;
-    obj.user_data = desc->user_data;
-    obj.transform.dirty = true; // 첫 draw 때 transform_ensure_updated가 계산
+    memcpy(entity.transform.pos,   desc->position, sizeof(float) * 3);
+    memcpy(entity.transform.rot,   desc->rotation, sizeof(float) * 3);
+    memcpy(entity.transform.scale, desc->scale,    sizeof(float) * 3);
+    entity.callbacks = desc->callbacks;
+    entity.user_data = desc->user_data;
+    entity.transform.dirty = true; // 첫 draw 때 transform_ensure_updated가 계산
 
-    return obj;
+    return entity;
 }
 
 void camera_update_view(Camera *camera) {
