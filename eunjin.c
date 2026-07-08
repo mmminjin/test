@@ -1,4 +1,4 @@
-/* gcc eunjin.c glad.c -o eunjin -I./include -L./lib -lSDL2 -lopengl32 -lm -Wall -Werror -std=c99 */
+/* gcc eunjin2.c glad.c -o eunjin2 -I./include -L./lib -lSDL2 -lopengl32 -lm -Wall -Werror -std=c99 */
 
 #define SDL_MAIN_HANDLED
 #define STB_IMAGE_IMPLEMENTATION
@@ -20,6 +20,8 @@
 #include <glad/glad.h>
 #include "stb_image.h"
 #include <tinyobj_loader_c.h>
+
+#define MAX_BEHAVIOURS 8
 
 typedef struct {
     SDL_Window *window;
@@ -230,6 +232,12 @@ typedef struct {
 
     bool view_dirty;  // position/target/up 바뀌면 true
     bool proj_dirty;  // fov/aspect/near/far 바뀌면 true
+
+    // temp
+    bool orbit_enabled;
+    float orbit_radius;
+    float orbit_speed;
+    float orbit_angle;
 } Camera;
 
 static void vec3_sub(float out[3], const float a[3], const float b[3]);
@@ -245,6 +253,7 @@ void camera_set_target(Camera *camera, float px, float py, float pz);
 void camera_set_position(Camera *camera, float px, float py, float pz);
 void camera_set_aspect(Camera *camera, float aspect);
 void camera_ensure_updated(Camera *camera);
+void camera_orbit_update(Camera *camera, float dt);
 
 typedef struct {
     float pos[3];
@@ -254,6 +263,8 @@ typedef struct {
     Mat4 model;
     bool dirty;
 } Transform;
+
+
 
 void transform_set_rotation(Transform *t, float x, float y, float z);
 void transform_ensure_updated(Transform *t);
@@ -265,68 +276,76 @@ typedef struct {
     float time;
 } SceneContext;
 
+/* Behaviour */
 typedef struct Entity Entity;
-typedef void (*update_callback_function)(Entity *entity, SceneContext *ctx, float dt);
-typedef void (*destroy_callback_function)(void *user_data);
+typedef struct Behaviour Behaviour;
+struct Behaviour {
+    void (*update)(Entity *,void *, SceneContext *, float);
+    void (*destroy)(void *);
+    void *data;
+    bool enabled;
+    // data ownership: Behaviour owns data,
+    // must call destroy before struct is freed
+};
 
 typedef struct {
-    update_callback_function update_functions[4]; // 필요한 만큼
-    int update_count;
-    destroy_callback_function destroy_function;
-} EntityCallbacks;
-
-// typedef struct Behaviour Behaviour;
-// typedef struct {
-//     void (*update)(Entity *,void *, SceneContext *, float);
-//     void (*destroy)(void *);
-//     void *data;
-// } Behaviour;
-
-// typedef struct {
-//     Behaviour behaviours[8];
-//     int behaviour_count;
-// } BehaviourSet;
-//
-// Entity
-//   └ behaviours[]
-//        ├ update
-//        ├ destroy
-//        └ data
+    Behaviour behaviours[MAX_BEHAVIOURS];
+    int behaviour_count;
+} BehaviourSet;
 
 struct Entity {
     Transform transform;
     Mesh *mesh;
     Material *material;
-
-    EntityCallbacks *callbacks;
-    void *user_data; // Entity owns user_data
-    //  BehaviourSet behaviour; // ecs
+    BehaviourSet behaviour_set;
 };
+
+void rotate_update(Entity *entity,void *data,SceneContext *ctx,float dt) {
+    (void)data;
+    (void)ctx;
+
+    entity->transform.rot[1] += dt;
+    entity->transform.dirty = true;
+}
 
 typedef struct {
     float phase;
     float speed;
 } BobData;
 
-void entity_rotate(Entity *entity, SceneContext *ctx, float dt) {
-    entity->transform.rot[1] += dt;
-    entity->transform.dirty = true;
-}
+void bob_update(Entity *entity,void *data,SceneContext *ctx,float dt) {
+    (void)ctx;
 
-void entity_bob(Entity *entity, SceneContext *ctx, float dt) {
-    BobData *b = entity->user_data;
+    BobData *b = data;
+
     b->phase += dt * b->speed;
 
-    //entity->transform.pos[1]= sinf(ctx->time);
     entity->transform.pos[1] = sinf(b->phase);
-
     entity->transform.dirty = true;
 }
 
-void bob_data_destroy(void *user_data) {
-    printf("bob_data_destroy was called: %p\n", user_data);
-    BobData *b = (BobData *)user_data;
-    free(b);
+void bob_destroy(void *data) {
+    free(data);   // BobData는 내부 포인터 없이 값만 있으니까 그냥 free면 충분
+}
+
+void entity_update(Entity *entity,SceneContext *ctx,float dt) {
+    for (int i = 0; i < entity->behaviour_set.behaviour_count; i++) {
+
+        Behaviour *cb = &entity->behaviour_set.behaviours[i];
+
+        if (cb->update)
+            cb->update(entity,cb->data,ctx,dt);
+    }
+}
+
+void entity_destroy(Entity *entity) {
+    for (int i = 0; i < entity->behaviour_set.behaviour_count; i++) {
+
+        Behaviour *cb = &entity->behaviour_set.behaviours[i];
+
+        if (cb->destroy)
+            cb->destroy(cb->data);
+    }
 }
 
 typedef struct {
@@ -371,8 +390,6 @@ typedef struct {
     float rotation[3];
     float scale[3];
 
-    EntityCallbacks *callbacks;
-    void *user_data;
 } EntityDescriptor;
 
 Entity entity_create(Assets *assets, EntityDescriptor *desc);
@@ -408,7 +425,8 @@ typedef struct {
 Renderer *renderer_create(Assets *assets, RenderDescriptor *desc);
 void renderer_destroy(Renderer *r);
 void renderer_resize(Renderer *r, int width, int height);
-void renderer_draw_entity(Entity *entity, SceneContext *ctx);
+void renderer_bind_frame_uniforms(ShaderProgram *prog, SceneContext *ctx);
+void renderer_draw_entity(Entity *entity, ShaderProgram *prog);
 void renderer_render_pass(Renderer *r, Entity *entities, int count, SceneContext *ctx);
 void renderer_present(Renderer *r, int screen_width, int screen_height); // offscreen -> 기본 프레임버퍼로 post_shader 적용해서 blit
 
@@ -435,32 +453,12 @@ int main(int argc, char *argv[]) {
     // 🛠️ 카메라는 창 aspect가 필요하니 씬 데이터보다 먼저 만들어둠.
     Camera main_camera;
     camera_init(&main_camera, (float)app.window_width / (float)app.window_height);
+    main_camera.orbit_enabled = true;
+    main_camera.orbit_radius = 5.0f;
+    main_camera.orbit_speed = degree_to_rad(10.0f);
+
     camera_set_position(&main_camera, 0.0f, 1.5f, 5.0f);
     camera_set_target(&main_camera, 0, 0, 0);
-
-    static EntityCallbacks hovering_callback = {
-        .update_functions = { entity_rotate, entity_bob },
-        .update_count = 2,
-        .destroy_function = bob_data_destroy
-    };
-
-    /*
-     * 기억할 규칙: malloc으로 만드는 user_data는 오브젝트 1개당 1개씩.
-     * 콜백은 공유해도 되지만(함수 포인터라 상태가 없으니까),
-     * malloc된 데이터는 절대 공유하면 안 돼요.
-     *  "콜백은 타입 단위 공유,
-     * user_data는 인스턴스 단위"라는 원칙 그대로예요.
-     * 행동(코드)은 공유하고, 상태(데이터)는 공유하지 마라.
-     */
-    BobData *data1 = malloc(sizeof(BobData));
-    data1->phase = 0;
-    data1->speed = 2.0f;
-
-    BobData *data2 = malloc(sizeof(BobData));
-    data2->phase = 0;
-    data2->speed = 3.0f;
-
-
 
     EntityDescriptor scene1_entities[] = {
         {
@@ -469,8 +467,6 @@ int main(int argc, char *argv[]) {
             .position = {1.0f, 0.0f, 0.0f},
             .rotation = {0.0f, 0.0f, 0.0f},
             .scale = {2.0f, 2.0f, 1.0f},
-            .callbacks = &hovering_callback,
-            .user_data = data1
         },
         {
             .mesh = MESH_PLANE,
@@ -485,8 +481,6 @@ int main(int argc, char *argv[]) {
             .position = {-1.0f, 0.0f, 0.0f},
             .rotation = {0.0f, 0.0f, 0.0f},
             .scale = {1.0f, 1.0f, 1.0f},
-            .callbacks = &hovering_callback,
-            .user_data = data2
         },
         {
             .mesh = MESH_SPHERE,
@@ -512,11 +506,36 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
+
+    // ↓ 여기 추가
+
+    // entity[0]: 회전만
+    scene1->entities[0].behaviour_set.behaviours[0] = (Behaviour){
+        .update = rotate_update,
+        // .destroy 없음, .data 없음 → 그냥 0/NULL로 남음 (calloc 아니라 malloc이면 주의)
+    };
+    scene1->entities[0].behaviour_set.behaviour_count = 1;
+
+    // entity[2] (monkey): 회전 + bob 둘 다
+    BobData *bob = malloc(sizeof(BobData));
+    *bob = (BobData){ .phase = 0.0f, .speed = 2.0f };
+
+    scene1->entities[2].behaviour_set.behaviours[0] = (Behaviour){
+        .update = rotate_update,
+    };
+    scene1->entities[2].behaviour_set.behaviours[1] = (Behaviour){
+        .update = bob_update,
+        .destroy = bob_destroy,
+        .data = bob,
+    };
+    scene1->entities[2].behaviour_set.behaviour_count = 2;
+
     RenderDescriptor render_desc = {
         .width = app.window_width,
         .height = app.window_height,
         .post_shader = SHADER_POST_INVERT,
     };
+
     Renderer *renderer = renderer_create(&assets, &render_desc);
     if (!renderer) {
         fprintf(stderr, "renderer_create failed\n");
@@ -529,9 +548,24 @@ int main(int argc, char *argv[]) {
 
     bool running = true;
     SDL_Event event;
-    float delta_time = 0.033f; // 고정 dt 예시 (실제로는 매 프레임 계산)
+    Uint64 last_time = SDL_GetTicks64();
+    float fps_timer = 0.0f;
+    int frame_count = 0;
 
     while(running) {
+        Uint64 current_time = SDL_GetTicks64();
+        float delta_time = (current_time - last_time) / 1000.0f; // ms -> 초
+        last_time = current_time;
+
+        // FPS 누적
+        frame_count++;
+        fps_timer += delta_time;
+        if (fps_timer >= 1.0f) {
+            printf("FPS: %d | dt: %.4f ms\n", frame_count, (fps_timer / frame_count) * 1000.0f);
+            frame_count = 0;
+            fps_timer = 0.0f;
+        }
+
         while(SDL_PollEvent(&event)) {
             if(event.type == SDL_QUIT) {
                 running = false;
@@ -555,7 +589,6 @@ int main(int argc, char *argv[]) {
         renderer_present(renderer, app.window_width, app.window_height);
 
         SDL_GL_SwapWindow(app.window);
-        SDL_Delay(33);
     }
 
     renderer_destroy(renderer);
@@ -591,6 +624,15 @@ AppContext app_context_create(int window_width, int window_height) {
         printf("OpenGL context creation failed: %s", SDL_GetError());
         goto fail_context;
     }
+
+    if (SDL_GL_SetSwapInterval(1) != 0) { // 1 = vsync 켜기
+        printf("vsync 설정 실패: %s\n", SDL_GetError());
+    }
+    /* SDL_GL_SetSwapInterval
+     * 0 — vsync 끔 (프레임 제한 없음, CPU/GPU가 낼 수 있는 최대 속도로 돎)
+     * 1 — vsync 켬 (모니터 주사율에 맞춰 SDL_GL_SwapWindow가 블로킹됨 — 60Hz 모니터면 자동으로 초당 60프레임으로 묶임)
+     * -1 — adaptive vsync (지원 안 하면 SDL이 자동으로 1로 폴백)
+     */
 
     if( !gladLoadGLLoader( (GLADloadproc)SDL_GL_GetProcAddress) ) {
         printf("GLAD Initialization failed\n");
@@ -993,20 +1035,12 @@ void vertex_binding_destroy(VertexBinding *binding) {
         glDeleteBuffers(1, &binding->ebo);
 }
 
-void renderer_draw_entity(Entity *entity, SceneContext *ctx) {
-    if (!entity || !entity->mesh || !entity->mesh->uploaded) return;
-
-    transform_ensure_updated(&entity->transform);
-
-    ShaderProgram *prog =entity->material->shader;
-    glUseProgram(prog->id); // entity->material->shader->id
+// 셰이더 바뀔 때만 부르는 함수
+void renderer_bind_frame_uniforms(ShaderProgram *prog, SceneContext *ctx) {
+    glUseProgram(prog->id);
 
     glUniformMatrix4fv(prog->locations[U_VIEW], 1, GL_FALSE, ctx->camera->view.data);
     glUniformMatrix4fv(prog->locations[U_PROJ], 1, GL_FALSE, ctx->camera->proj.data);
-    glUniformMatrix4fv(prog->locations[U_MODEL], 1, GL_FALSE, entity->transform.model.data);
-
-    if(prog->locations[U_OBJ_COLOR] != -1)
-        glUniform3fv(prog->locations[U_OBJ_COLOR], 1, entity->material->color);
 
     if(prog->locations[U_LIGHT_POS] != -1)
         glUniform3fv(prog->locations[U_LIGHT_POS], 1, ctx->light_pos);
@@ -1022,6 +1056,16 @@ void renderer_draw_entity(Entity *entity, SceneContext *ctx) {
 
     if(prog->locations[U_TIME] != -1)
         glUniform1f(prog->locations[U_TIME], ctx->time);
+}
+
+// renderer_draw_entity는 "이미 바인딩된 셰이더 기준으로 엔티티 하나 그리기"만 담당
+void renderer_draw_entity(Entity *entity, ShaderProgram *prog) {
+    transform_ensure_updated(&entity->transform);
+
+    glUniformMatrix4fv(prog->locations[U_MODEL], 1, GL_FALSE, entity->transform.model.data);
+
+    if(prog->locations[U_OBJ_COLOR] != -1)
+        glUniform3fv(prog->locations[U_OBJ_COLOR], 1, entity->material->color);
 
     if(entity->material->texture != 0) {
         glActiveTexture(GL_TEXTURE0);
@@ -1029,7 +1073,6 @@ void renderer_draw_entity(Entity *entity, SceneContext *ctx) {
         if(prog->locations[U_DIFFUSE_TEX] != -1)
             glUniform1i(prog->locations[U_DIFFUSE_TEX], 0);
     } else {
-        // 💡 텍스처가 없는 오브젝트라면 파이프라인을 깨끗하게 비워줍니다.
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
@@ -1042,14 +1085,37 @@ void renderer_draw_entity(Entity *entity, SceneContext *ctx) {
     glBindVertexArray(0);
 }
 
+// render_pass가 둘을 조합
 void renderer_render_pass(Renderer *r, Entity *entities, int count, SceneContext *ctx) {
     glBindFramebuffer(GL_FRAMEBUFFER, r->offscreen.fbo);
     glViewport(0, 0, r->width, r->height);
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    /*
+     * 중요한 전제 하나: 이 최적화가 효과 있으려면
+     * entities 배열이 셰이더 기준으로 정렬되어 있어야 해요.
+     * 지금처럼 엔티티들이 뒤죽박죽 순서면
+     * prog->id != last_program이 매번 참이 될 수도 있어서
+     *  (A 셰이더, B 셰이더, A 셰이더, B 셰이더... 이런 식이면)
+     * 최적화가 거의 안 먹힘. RenderQueue 만들 때
+     * 셰이더 id로 정렬 한 번 넣어주는 게 세트로 필요해요.
+     */
+
+    GLuint last_program = 0;
     for (int i = 0; i < count; i++) {
-        renderer_draw_entity(&entities[i], ctx);
+        Entity *entity = &entities[i];
+        if (!entity->mesh || !entity->mesh->uploaded) continue;
+
+        ShaderProgram *prog = entity->material->shader;
+        if (!prog || prog->id == 0) continue; // ◀ 셰이더 안전망 추가
+
+        if (prog->id != last_program) {
+            renderer_bind_frame_uniforms(prog, ctx);
+            last_program = prog->id;
+        }
+
+        renderer_draw_entity(entity, prog);
     }
 }
 
@@ -1084,29 +1150,14 @@ void scene_update(Scene *scene, float dt) {
     // 1. 시간 업데이트
     scene->context.time += dt;
 
+    // temp
+    camera_orbit_update(scene->context.camera, dt);
+
     // 2. 카메라 상태 업데이트 및 행렬 재계산
     camera_ensure_updated(scene->context.camera);
 
-    for(int i=0;i<scene->entity_count;i++)
-    {
-        Entity *entity =  &scene->entities[i];
-        // 이 코드는 새로운 객체를 복사해서 만드는 것이 아니라,
-        // 이미 메모리에 자리 잡고 있는 동적 배열의 i번째 칸 주소를
-        // entity에게 잠시 알려준 것뿐입니다.
-        // endtity는 주소만 임시로 담아 조작하기 위해 쓴
-        // **'스택의 징검다리 변수'**일 뿐이므로 함수가 끝나면 알아서 사라집니다.
-        // 진짜 데이터는 **힙(Heap)**에 안전하게 보존되어
-        //  다음 프레임의 renderer_render_pass 등에서 정상적으로 그려지게 됩니다!
-        // C언어에서 Entity *entity = &scene->enties[i];와
-        // 같이 작성하는 것은 오직 가독성 향상, 타이핑 간소화,
-        // 그리고 컴파일러의 최적화 유도를 위해 내부적으로 주소만 임시로 붙여둔 것에 불과합니다.
-
-        if (entity->callbacks) {
-            for (int j = 0; j < entity->callbacks->update_count; j++) {
-                if (entity->callbacks->update_functions[j])
-                    entity->callbacks->update_functions[j](entity, &scene->context, dt);
-            }
-        }
+    for(int i=0;i<scene->entity_count;i++){
+        entity_update(&scene->entities[i], &scene->context, dt);
     }
 
 }
@@ -1140,10 +1191,7 @@ void scene_destroy(Scene **scene) {
     if (!scene || !*scene) return;
 
     for (int i = 0; i < (*scene)->entity_count; i++) {
-        Entity *entity = &(*scene)->entities[i];
-        if (entity->callbacks && entity->callbacks->destroy_function) {
-            entity->callbacks->destroy_function(entity->user_data);
-        }
+        entity_destroy(&(*scene)->entities[i]);   // 주석 풀고 이렇게
     }
 
     free((*scene)->entities);
@@ -1357,8 +1405,8 @@ Entity entity_create(Assets *assets, EntityDescriptor *desc) {
     memcpy(entity.transform.pos,   desc->position, sizeof(float) * 3);
     memcpy(entity.transform.rot,   desc->rotation, sizeof(float) * 3);
     memcpy(entity.transform.scale, desc->scale,    sizeof(float) * 3);
-    entity.callbacks = desc->callbacks;
-    entity.user_data = desc->user_data;
+    // entity.callbacks = desc->callbacks;
+    // entity.user_data = desc->user_data;
     entity.transform.dirty = true; // 첫 draw 때 transform_ensure_updated가 계산
 
     return entity;
@@ -1509,6 +1557,15 @@ void camera_ensure_updated(Camera *camera) {
         camera_update_proj(camera);
         camera->proj_dirty = false;
     }
+}
+
+void camera_orbit_update(Camera *camera, float dt) {
+    if (!camera->orbit_enabled) return;
+    camera->orbit_angle += camera->orbit_speed * dt;
+    camera_set_position(camera,
+        cosf(camera->orbit_angle) * camera->orbit_radius,
+        camera->position[1],
+        sinf(camera->orbit_angle) * camera->orbit_radius);
 }
 
 void transform_set_rotation(Transform *t, float x, float y, float z) {
@@ -1679,21 +1736,6 @@ void assets_destroy(Assets *assets) {
         if (assets->shaders[i].id) shader_program_destroy(assets->shaders[i].id);
     }
 }
-
-/*
-void assets_add_mesh(Assets *assets, const char *key, Mesh *mesh) {
-    strcpy(assets->meshes[assets->mesh_count], key);
-    assets->meshes[assets->mesh_count].resource = mesh;
-    assets->mesh_count++;
-}
-
-Mesh *assets_get_mesh(Assets *assets, const char *key) {
-    for (int i = 0; i < assets->mesh_count; i++) {
-        if (strcmp(assets->meshes[i], key) == 0) return assets->meshes[i].resource;
-    }
-    return NULL;
-}
-*/
 
 Renderer *renderer_create(Assets *assets, RenderDescriptor *desc) {
     Renderer *r = calloc(1, sizeof(Renderer));
